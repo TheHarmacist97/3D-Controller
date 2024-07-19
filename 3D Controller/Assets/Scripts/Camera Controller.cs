@@ -1,36 +1,77 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using Cinemachine;
 
-public enum CameraState
-{
-    Third_Person, //free; orientation of next movement provided by camera script
-    Over_The_Shoulder //locked to character/aiming; orientation of next movement depends on character script
-}
 
 public class CameraController : MonoBehaviour
 {
-    public CameraState cameraState;
-    [SerializeField] private Camera cam;
-    [SerializeField] private TPSController character;
-    [SerializeField] private Transform lookTarget;
-    [SerializeField] private Transform posTarget;
-    
-    // Start is called before the first frame update
-    void Start()
-    {
-        
-    }
+    [SerializeField] private CinemachineVirtualCamera followCam;
+    [SerializeField] private CinemachineVirtualCamera aimCamRight;
+    [SerializeField] private CinemachineVirtualCamera aimCamLeft;
+    [SerializeField] private CanvasGroup reticleGroup;
+    [SerializeField] private float duration;
+
+    private bool isAiming, lastAimState;
+    private bool rightShoulder;
+    private Coroutine aimCoroutine;
 
     // Update is called once per frame
-    void Update()
+    private void Start()
     {
-        
+        DiableAllCameras();
+
+        SetState();
     }
 
-
-    public void DoAimPunch(Vector3 location)
+    private void DiableAllCameras()
     {
+        followCam.enabled = false;
+        aimCamRight.enabled = false;
+        aimCamLeft.enabled = false;
+    }
 
+    public void SwitchFollowType(bool isAiming)
+    {
+        this.isAiming = isAiming;
+        SetState();
+    }
+
+    public void SwitchShoulder(bool rightShoulder)
+    {
+        this.rightShoulder = rightShoulder;
+        SetState();
+    }
+
+    private void SetState()
+    {
+        followCam.enabled = !isAiming;
+        aimCamRight.enabled = isAiming && rightShoulder;
+        aimCamLeft.enabled = isAiming && !rightShoulder;
+
+        if (lastAimState != isAiming)
+        {
+            if (aimCoroutine != null)
+                StopCoroutine(aimCoroutine);
+
+            aimCoroutine = StartCoroutine(LerpReticle());
+        }
+        lastAimState = isAiming;
+    }
+
+    private IEnumerator LerpReticle()
+    {
+        float target = isAiming ? 1.0f : 0.0f;
+        float current = reticleGroup.alpha;
+
+        if (current == target) yield break;
+        float elapsedTime = 0f;
+        
+        while(elapsedTime < 1f)
+        {
+            elapsedTime += Time.deltaTime / duration;
+            reticleGroup.alpha = Mathf.Lerp(current, target, elapsedTime);
+            yield return null;
+        }
     }
 }

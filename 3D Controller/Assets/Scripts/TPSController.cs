@@ -1,5 +1,4 @@
 using System;
-using Unity.Mathematics;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,6 +10,15 @@ public enum PhysicState
     Grounded,
     TraversingSlope,
     SlidingDown,
+}
+
+[Flags]
+public enum CharacterState
+{
+    Walking = 1,
+    Running = 2,
+    Aiming = 4,
+    Dashing = 8,
 }
 
 public class TPSController : MonoBehaviour
@@ -33,20 +41,28 @@ public class TPSController : MonoBehaviour
     [Space(10)]
 
     [Header("Physics")]
+
     public PhysicState physicState;
+    [SerializeField, Range(0.01f, 2f)] private float gravityModifier;
 
     [SerializeField, Range(0f, 0.99f)] private float groundedLimit; //max incline for grounded state 
     [SerializeField, Range(0f, 0.99f)] private float slopeLimit; //max incline for slopeTraversal
+
+    [SerializeField] private float airDrag;
+    [SerializeField] private float groundDrag;
 
     [SerializeField] private float groundCheckDistance;
     [SerializeField] private LayerMask groundLayer;
 
     [Header("Character")]
+    [SerializeField] private CharacterState characterState; 
     [SerializeField] private bool isAiming;
+    [SerializeField] private bool rightShoulder;
 
     [Header("Camera Related")]
+    [SerializeField] private CameraController cameraController;
     [SerializeField] private Vector2 sensitivity;
-    [SerializeField] private Transform cameraParent;
+    [SerializeField] private Transform shoulderTarget;
     [SerializeField] Transform model;
 
     private CapsuleCollider characterCollider;
@@ -54,7 +70,7 @@ public class TPSController : MonoBehaviour
 
     private bool jumpSignal, canJump, isGrounded;
 
-    private Vector3 headingDir, lateralMovement;
+    private Vector3 headingDir;
     private Vector2 lookDir;
     private int currentJumps;
 
@@ -63,6 +79,7 @@ public class TPSController : MonoBehaviour
     private Ray groundRay;
     private RaycastHit groundRayHit;
     private Vector3 adjustmentVector;
+    private float currentDrag;
 
     private void Awake()
     {
@@ -88,15 +105,15 @@ public class TPSController : MonoBehaviour
 
     private void UpdateVisualState()
     {
-        if(isAiming)
+        if (isAiming)
         {
             model.rotation = Quaternion.Euler(0f, lookDir.x, 0f);
         }
-        else if(headingDir.sqrMagnitude>0f)
+        else if (headingDir.sqrMagnitude > 0f)
         {
-            model.rotation = Quaternion.LookRotation(headingDir, Vector3.up);
+            model.rotation = Quaternion.LookRotation(new Vector3(headingDir.x, 0f, headingDir.z), Vector3.up);
         }
-        cameraParent.rotation = Quaternion.Euler(lookDir.y, lookDir.x, 0f);
+        shoulderTarget.rotation = Quaternion.Euler(lookDir.y, lookDir.x, 0f);
     }
 
     private void GetState()
@@ -118,6 +135,7 @@ public class TPSController : MonoBehaviour
         adjustmentVector = canJump ? groundRayHit.normal : Vector3.up;
 
         GetCurrentPhysicState();
+        ModulateDrag();
     }
 
     private void GetCurrentPhysicState()
@@ -144,6 +162,13 @@ public class TPSController : MonoBehaviour
 
     }
 
+
+    private void ModulateDrag()
+    {
+        currentDrag = !isGrounded ? physicState == PhysicState.Falling ? Mathf.Max(currentDrag - Time.deltaTime, 0f):airDrag:groundDrag;
+        rb.drag = currentDrag;
+    }
+
     private void GetInput()
     {
         GetMouseFunctions();
@@ -151,6 +176,11 @@ public class TPSController : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Space) && canJump)
         {
             jumpSignal = true;
+        }
+        if(Input.GetKeyDown(KeyCode.H))
+        {
+            rightShoulder = !rightShoulder;
+            cameraController.SwitchShoulder(rightShoulder);
         }
     }
 
@@ -164,11 +194,12 @@ public class TPSController : MonoBehaviour
         if (Input.GetMouseButtonDown(1))
         {
             isAiming = !isAiming;
+            cameraController.SwitchFollowType(isAiming);
         }
         lookDir.x += Input.GetAxisRaw("Mouse X") * sensitivity.x; //yaw
-        lookDir.y += Input.GetAxisRaw("Mouse Y") * sensitivity.y; //pitch
+        lookDir.y -= Input.GetAxisRaw("Mouse Y") * sensitivity.y; //pitch
 
-        //lookDir.y = Mathf.Clamp(-40f, 180f, lookDir.y);
+        lookDir.y = Mathf.Clamp(lookDir.y, -45f, 80f);
     }
 
     private void GetLateralMovement()
@@ -190,8 +221,8 @@ public class TPSController : MonoBehaviour
         float s = Mathf.Sin(rads);
         float c = Mathf.Cos(rads);
 
-        rotVec.x = c*input.x - s*input.z;
-        rotVec.z = s*input.x + c*input.z;
+        rotVec.x = c * input.x - s * input.z;
+        rotVec.z = s * input.x + c * input.z;
 
         return rotVec;
     }
@@ -201,7 +232,7 @@ public class TPSController : MonoBehaviour
         float stateBasedAcceleration = GetAcceleration();
         rb.AddForce(headingDir * stateBasedAcceleration, ForceMode.VelocityChange);
         Vector3 gravity = GetStateBasedGravity();
-        rb.AddForce(gravity, ForceMode.Acceleration);
+        rb.AddForce(gravity, ForceMode.VelocityChange);
         headingDir = Vector3.zero;
         if (jumpSignal)
         {
@@ -216,7 +247,7 @@ public class TPSController : MonoBehaviour
         return physicState switch
         {
             PhysicState.Grounded or PhysicState.TraversingSlope => Vector3.zero,
-            PhysicState.Jumping or PhysicState.Falling or PhysicState.SlidingDown => Physics.gravity,
+            PhysicState.Jumping or PhysicState.Falling or PhysicState.SlidingDown => gravityModifier * Time.fixedDeltaTime * Physics.gravity,
             _ => Vector3.zero,
         };
     }
@@ -225,8 +256,8 @@ public class TPSController : MonoBehaviour
     {
         return physicState switch
         {
-            PhysicState.Jumping => jumpAccel,
-            PhysicState.Falling => fallAccel,
+            PhysicState.Jumping => jumpAccel*rb.drag,
+            PhysicState.Falling => fallAccel*rb.drag,
             PhysicState.Grounded => acceleration,
             PhysicState.TraversingSlope => Mathf.Max(acceleration + (headingDir.y > 0 ? -inclineModifier : declineModifier), 0f),
             PhysicState.SlidingDown => slidingAccel,
